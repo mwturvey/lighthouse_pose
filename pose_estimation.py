@@ -106,7 +106,7 @@ model_points = open_config("LHR-B4ABXXXX-Charles.json")
 pointsa, idsa = load_points("live_center.csv", "L", count=1)
 pose_num = 0
 ids = []
-zGuess = array([3, 3, 3, 3])  # Initial guess, may not converge.
+zGuess = array([3, 3, 3, 3])  # Initial guess (of radii), may not converge.
 
 for points in pointsa:
     print("Pose:", pose_num)
@@ -116,6 +116,9 @@ for points in pointsa:
     if len(ids) < 4:  # Ignores data with less than 4 points.
         continue
 
+    # Finding the distance between points on the HMD
+    # ids[x] representsw point x
+    # the second index represents x(0), y(1), or z(2)
     k1 = pow((model_points[ids[0]][0] - model_points[ids[1]][0]), 2)\
          + pow((model_points[ids[0]][1] - model_points[ids[1]][1]), 2)\
          + pow((model_points[ids[0]][2] - model_points[ids[1]][2]), 2)
@@ -129,6 +132,7 @@ for points in pointsa:
          + pow((model_points[ids[0]][1] - model_points[ids[3]][1]), 2)\
          + pow((model_points[ids[0]][2] - model_points[ids[3]][2]), 2)
 
+    # The sweep angles for the first four points
     theta_1 = points[0][0]
     theta_2 = points[1][0]
     theta_3 = points[2][0]
@@ -140,11 +144,14 @@ for points in pointsa:
 
 
     def equations(z):  # Equation used by scipy
+        # z is the matrix coming in...
         r1 = z[0]
         r2 = z[1]
         r3 = z[2]
         r4 = z[3]
 
+        # Okay, what exactly is F here... 
+        # These appear to be the difference of the square of the distances between points.  We'd want to minimize these
         F = empty(4)
         F[0] = pow(r1, 2)+pow(r2, 2)-2*r1*r2*(sin(theta_1)*sin(theta_2)*cos(phi_1-phi_2)+cos(theta_1)*cos(theta_2))-k1
         F[1] = pow(r2, 2)+pow(r3, 2)-2*r2*r3*(sin(theta_2)*sin(theta_3)*cos(phi_2-phi_3)+cos(theta_2)*cos(theta_3))-k2
@@ -155,6 +162,9 @@ for points in pointsa:
 
     # Need to find the best nonlinear solver for this
     # z = scipy.optimize.fsolve(equations, zGuess, xtol=1.5e-05)
+    
+    #equations is the lambda from above.  zGuess is iterating to a (hopefully) better solution.  
+    # TODO: Fn to C
     z = scipy.optimize.least_squares(equations, zGuess)
     zGuess = z.x  # Using the previous result as initial guess
     n = 4
@@ -165,16 +175,24 @@ for points in pointsa:
     r3 = z.x[2]
     r4 = z.x[3]
 
+    # matrix of the x.y.z coordinates for all 4 points used of the tracked object
     A_2 = np.matrix([[model_points[ids[0]][0], model_points[ids[0]][1], model_points[ids[0]][2]],
                      [model_points[ids[1]][0], model_points[ids[1]][1], model_points[ids[1]][2]],
                      [model_points[ids[2]][0], model_points[ids[2]][1], model_points[ids[2]][2]],
                      [model_points[ids[3]][0], model_points[ids[3]][1], model_points[ids[3]][2]]])
+    
+    # Ahh... Are r1,r2,r3,r4 just estimated distances (radii) to the given points?
+    # Okay, looks like this is now figuring out where the tracked object is relative to the lighthouse
+    # given the radii that came out of the least squares search above.
     B_2 = np.matrix([[r1*sin(phi_1)*cos(theta_1), r1*cos(phi_1), r1*sin(phi_1)*sin(theta_1)],
                      [r2*sin(phi_2)*cos(theta_2), r2*cos(phi_2), r2*sin(phi_2)*sin(theta_2)],
                      [r3*sin(phi_3)*cos(theta_3), r3*cos(phi_3), r3*sin(phi_3)*sin(theta_3)],
                      [r4*sin(phi_4)*cos(theta_4), r4*cos(phi_4), r4*sin(phi_4)*sin(theta_4)]])
 
+    # TODO: Fn to C
     ret_R, ret_t = rigid_transform_3D(B_2, A_2)
+    
+    # TODO: Fn to C (tile)    
     A2 = (ret_R * B_2.T) + tile(ret_t, (1, n))
     A2 = A2.T
 
@@ -183,6 +201,7 @@ for points in pointsa:
     err = sum(err)
     rmse = sqrt(err / n)
 
+    # TODO: Fn to C (we may have this already in linmath)
     phi, theta, gamma = rotmat2euler(ret_R, False)
 
     print("Translation Vector")
@@ -194,6 +213,8 @@ for points in pointsa:
     print("Euler Angles")
     print(phi, theta, gamma)
 
+    # this appears to be the distance to the average of the points, not the origin of the tracked object.
+    # nope, this is the distance of the translation vector.  All good.
     dist_r = sqrt(ret_t[0]**2 + ret_t[1]**2 + ret_t[2]**2)
     print("Distance", dist_r)
     print("RMSE:", rmse)
